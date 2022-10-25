@@ -39,7 +39,7 @@ mod tests {
     fn file_is_asn1_sequence() {
         let test_cert = "1.crt".to_string();
         let buf = get_file_as_byte_vec(&test_cert);
-        let asn1_type = get_asn1_type(buf).unwrap();
+        let asn1_type = get_asn1_type(&buf).unwrap();
         assert!(matches!(asn1_type, ASN1Base::Sequence));
     }
 }
