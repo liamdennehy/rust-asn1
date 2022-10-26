@@ -165,9 +165,9 @@ mod tests {
     fn get_inner_sequence_field3() {
         let test_cert = "1.crt".to_string();
         let buf = get_file_as_byte_vec(&test_cert);
-        // let field = get_field(&buf[863..buf.len()]).unwrap();
-        // assert!(matches!(field.tag, Tag::BitString));
-        // assert_eq!(field.header_length,4);
-        // assert_eq!(field.payload_length,513);
+        let field = get_field(&buf[863..buf.len()]).unwrap();
+        assert!(matches!(field.tag, Tag::BitString));
+        assert_eq!(field.header_length,4);
+        assert_eq!(field.payload_length,513);
     }
 }
