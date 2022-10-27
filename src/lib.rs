@@ -73,9 +73,17 @@ pub fn get_asn1_type(buf: &[u8]) -> (Tag, TagClass, u8) {
     tag_class = TagClass::Universal;
     let tag: Tag;
     match tag_bits {
+        0x02 => tag = Tag::Integer,
         0x03 => tag = Tag::BitString,
+        0x04 => tag = Tag::OctetString,
+        0x05 => tag = Tag::Null,
+        0x06 => tag = Tag::ObjectIdentifier,
         0x10 => tag = Tag::Sequence,
-        _ => panic!()
+        0x11 => tag = Tag::Set,
+        0x13 => tag = Tag::PrintableString,
+        0x16 => tag = Tag::IA5String,
+        0x17 => tag = Tag::UTCTime,
+        _ => panic!("Encountered an unrecognised ASN1 Tag: {}", tag_bits)
         // _ => return (Tag::Unknown, tag_class)
     }
     return (tag, tag_class, tag_byte)
@@ -91,7 +99,6 @@ pub fn get_field(buf: &[u8]) -> Result<ASN1Field, String> {
         0 ..=127 => {
             header_length = 2;
             println!("Short Length");
-            lenbytes = 1;
             buf[1] as u64
         },
         128 ..=255 => {
@@ -167,7 +174,7 @@ mod tests {
     fn file_is_asn1_sequence() {
         let test_cert = "1.crt".to_string();
         let buf = get_file_as_byte_vec(&test_cert);
-        let (tag, tag_class) = get_asn1_type(&buf);
+        let (tag, tag_class, tag_byte) = get_asn1_type(&buf);
         assert!(matches!(tag, Tag::Sequence));
         assert!(matches!(tag_class, TagClass::Universal));
     }
@@ -197,7 +204,7 @@ mod tests {
         let buf = get_file_as_byte_vec(&test_cert);
         let field = get_field(&buf[848..buf.len()]).unwrap();
         assert!(matches!(field.tag, Tag::Sequence));
-        assert_eq!(field.header_length,3);
+        assert_eq!(field.header_length,2);
         assert_eq!(field.payload_length,13);
     }
     #[test]
