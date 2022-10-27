@@ -5,8 +5,9 @@ pub struct ASN1Field <'a> {
     tag: Tag,
     tag_class: TagClass,
     binary: &'a [u8],
-    header_length: usize,
-    payload_length: usize
+    header_length: u8,
+    payload_length: u64,
+    // members: Option<&'a [ASN1Field<'a>]>
 }
 
 pub enum Tag {
@@ -42,64 +43,102 @@ pub struct Sequence <'a> {
     contents: &'a [u8]
 }
 
-pub fn get_asn1_type(buf: &[u8]) -> (Tag, TagClass) {
+pub fn get_asn1_type(buf: &[u8]) -> (Tag, TagClass, u8) {
     let tag_byte: u8 = buf[0];
-    let tag_bits: u8 = tag_byte << 2 >> 2;
     let tag_class_bits = tag_byte >> 6;
+    if tag_class_bits > 0 {
+        return (
+            Tag::Unknown,
+            match tag_class_bits {
+                1 => TagClass::Application,
+                2 => TagClass::ContextSpecific,
+                3 => TagClass::Private,
+                _ => panic!("This should not happen")
+            },
+            tag_byte
+        )
+    }
+    let tag_is_constructed = (tag_byte & 32) == 32;
+    let tag_bits: u8;
+    if tag_is_constructed {
+        println!("Constructed tag");
+        tag_bits = (tag_byte - 32) << 2 >> 2;
+    } else {
+        tag_bits = tag_byte << 2 >> 2;
+    }
     let tag_class: TagClass;
-    println!("{}",tag_class_bits);
-    match tag_class_bits {
-        0 => tag_class = TagClass::Universal,
-        1 => tag_class = TagClass::Application,
-        2 => tag_class = TagClass::ContextSpecific,
-        3 => tag_class = TagClass::Private,
-        _ => panic!("Not possible, bit shift broke"),
-    }
+    println!("Tag Byte: {}",tag_byte);
+    println!("Tag Class: {}",tag_class_bits);
     println!{"tag bits: {}",tag_bits};
+    tag_class = TagClass::Universal;
+    let tag: Tag;
     match tag_bits {
-        0x03 => return (Tag::BitString, tag_class),
-        0x30 => return (Tag::Sequence, tag_class),
-        _ => return (Tag::Unknown, tag_class)
+        0x03 => tag = Tag::BitString,
+        0x10 => tag = Tag::Sequence,
+        _ => panic!()
+        // _ => return (Tag::Unknown, tag_class)
     }
+    return (tag, tag_class, tag_byte)
 }
 
 pub fn get_field(buf: &[u8]) -> Result<ASN1Field, String> {
-    let (tag, tag_class) = get_asn1_type(&buf);
-    let lenbytes: usize;
-    let len: usize = match buf[1] {
-        0 ..=128 => {
-            // println!("Short!");
+    let members: Option<&[ASN1Field]>;
+    let (tag, tag_class, tag_byte) = get_asn1_type(&buf);
+    let lenbytes: u8;
+    let header_length: u8;
+    println!("Length byte 1: {}", buf[1]);
+    let payload_length: u64 = match buf[1] {
+        0 ..=127 => {
+            header_length = 2;
+            println!("Short Length");
             lenbytes = 1;
-            buf[1] as usize
+            buf[1] as u64
         },
-        _ => {
-            // println!("Long: {:?}", buf[offset + 1]);
-            lenbytes = (buf[1] - 128) as usize;
-            let mut len: usize = 0;
-            for byte in 0..lenbytes {
+        128 ..=255 => {
+            println!("Long Length");
+            lenbytes = buf[1] - 128;
+            header_length = lenbytes + 2;
+            let mut payload_length: u64 = 0;
+            for lenbyte in 0..lenbytes {
                 // println!("Byte: {:?}", buf[offset + byte + 2]);
-                len += (buf[byte + 2]) as usize;
-                if byte < (lenbytes - 1) {
-                    len = len << 8;
+                payload_length += buf[(lenbyte as usize) + 2] as u64;
+                if lenbyte < (lenbytes - 1) {
+                    payload_length = payload_length << 8;
                 }
             }
-            len
+            payload_length
         }
     };
-    let header_length = lenbytes + 2;
-    println!("Field Length: {:?}", buf.len());
+    println!("Buffer bytes left: {:?}", buf.len() - header_length as usize);
     println!("Field Header Length: {:?}", header_length);
-    if (len + header_length) > buf.len() {
-        return Err("Length of field exceeded input buffer".to_string());
+    if (payload_length + header_length as u64) > buf.len() as u64 {
+        return Err(format!("Length of field ({}) exceeded input buffer", payload_length));
     }
-    let payload = &buf[(header_length)..(len + header_length)].to_vec();
+    let payload = &buf[(header_length as usize)..((payload_length + header_length as u64) as usize)];
     println!("Field Payload Length: {:?}", payload.len());
+    let mut member: ASN1Field;
+    let mut member_offset: usize = 0;
+    match tag {
+        Tag::Sequence => {
+            println!("Found a Sequence!");
+            println!();
+            println!("Sequence offset: {}", member_offset);
+            member = get_field(&payload).unwrap();
+            member_offset += member.header_length as usize + member.payload_length as usize;
+            member = get_field(&payload[member_offset..payload.len()]).unwrap();
+
+            members = Some(&[member]);
+        },
+        Tag::Set => members = Some(&[]),
+        _ => members = None
+    }
     Ok(ASN1Field {
         tag: tag,
         tag_class: tag_class,
         binary: &buf,
         header_length: header_length,
-        payload_length: len
+        payload_length: payload_length,
+        // members: members
     })
 }
 
@@ -144,7 +183,7 @@ mod tests {
         assert_eq!(field.payload_length,1376);
     }
     #[test]
-    fn get_inner_sequence_field1() {
+    fn get_sequence_inner_field1() {
         let test_cert = "1.crt".to_string();
         let buf = get_file_as_byte_vec(&test_cert);
         let field = get_field(&buf[4..buf.len()]).unwrap();
@@ -153,7 +192,7 @@ mod tests {
         assert_eq!(field.payload_length,840);
     }
     #[test]
-    fn get_inner_sequence_field2() {
+    fn get_sequence_inner_field2() {
         let test_cert = "1.crt".to_string();
         let buf = get_file_as_byte_vec(&test_cert);
         let field = get_field(&buf[848..buf.len()]).unwrap();
@@ -162,7 +201,7 @@ mod tests {
         assert_eq!(field.payload_length,13);
     }
     #[test]
-    fn get_inner_sequence_field3() {
+    fn get_sequence_inner_field3() {
         let test_cert = "1.crt".to_string();
         let buf = get_file_as_byte_vec(&test_cert);
         let field = get_field(&buf[863..buf.len()]).unwrap();
