@@ -4,10 +4,11 @@ use std::io::Read;
 pub struct ASN1Field <'a> {
     tag: Tag,
     tag_class: TagClass,
-    binary: &'a [u8],
+    buf: &'a Vec<u8>,
+    start_offset: u64,
     header_length: u8,
     payload_length: u64,
-    // members: Option<&'a [ASN1Field<'a>]>
+    members: Vec<ASN1Field<'a>>
 }
 
 pub enum Tag {
@@ -61,15 +62,15 @@ pub fn get_asn1_type(buf: &[u8]) -> (Tag, TagClass, u8) {
     let tag_is_constructed = (tag_byte & 32) == 32;
     let tag_bits: u8;
     if tag_is_constructed {
-        println!("Constructed tag");
+        // println!("Constructed tag");
         tag_bits = (tag_byte - 32) << 2 >> 2;
     } else {
         tag_bits = tag_byte << 2 >> 2;
     }
     let tag_class: TagClass;
-    println!("Tag Byte: {}",tag_byte);
-    println!("Tag Class: {}",tag_class_bits);
-    println!{"tag bits: {}",tag_bits};
+    // println!("Tag Byte: {}",tag_byte);
+    // println!("Tag Class: {}",tag_class_bits);
+    // println!{"tag bits: {}",tag_bits};
     tag_class = TagClass::Universal;
     let tag: Tag;
     match tag_bits {
@@ -89,66 +90,101 @@ pub fn get_asn1_type(buf: &[u8]) -> (Tag, TagClass, u8) {
     return (tag, tag_class, tag_byte)
 }
 
-pub fn get_field(buf: &[u8]) -> Result<ASN1Field, String> {
-    let members: Option<&[ASN1Field]>;
-    let (tag, tag_class, tag_byte) = get_asn1_type(&buf);
+pub fn asn1_printable_type(tag: &Tag) -> String {
+    match tag {
+        Tag::Integer => String::from("Integer"),
+        Tag::BitString => String::from("BitString"),
+        Tag::Null => String::from("Null"),
+        Tag::ObjectIdentifier => String::from("ObjectIdentifier"),
+        Tag::PrintableString => String::from("PrintableString"),
+        Tag::Sequence => String::from("Sequence"),
+        Tag::UTCTime => String::from("UTCTime"),
+        _ => String::from("Unknown")
+    }
+}
+
+pub fn get_field(buf: &Vec<u8>, start_offset: u64) -> Result<ASN1Field, String> {
+// pub fn get_field<'a>(buf: &'a [u8]) -> Result<ASN1Field, String> {
+    println!("Getting a field from offset {}", start_offset);
+    let (tag, tag_class, tag_byte) = get_asn1_type(&buf[(start_offset as usize)..buf.len()]);
+    println!("Field Tag: {} ({})", asn1_printable_type(&tag), tag_byte);
     let lenbytes: u8;
     let header_length: u8;
-    println!("Length byte 1: {}", buf[1]);
-    let payload_length: u64 = match buf[1] {
+    // println!("Length byte 1: {}", buf[1]);
+    let payload_length: u64 = match buf[start_offset as usize + 1] {
         0 ..=127 => {
             header_length = 2;
-            println!("Short Length");
-            buf[1] as u64
+            buf[start_offset as usize + 1] as u64
         },
         128 ..=255 => {
-            println!("Long Length");
             lenbytes = buf[1] - 128;
             header_length = lenbytes + 2;
-            let mut payload_length: u64 = 0;
+            let mut payload_length: u64 = 0; // lenbytes are a variable-length integer of the payload length.
+            let mut lenbytecount: u8 = 0; // How many bytes have we processed
             for lenbyte in 0..lenbytes {
                 // println!("Byte: {:?}", buf[offset + byte + 2]);
-                payload_length += buf[(lenbyte as usize) + 2] as u64;
-                if lenbyte < (lenbytes - 1) {
+                payload_length += buf[start_offset as usize + (lenbyte as usize) + 2] as u64;
+                lenbytecount += 1;
+                if lenbytecount < lenbytes {
                     payload_length = payload_length << 8;
                 }
             }
             payload_length
         }
     };
-    println!("Buffer bytes left: {:?}", buf.len() - header_length as usize);
-    println!("Field Header Length: {:?}", header_length);
+    // println!("Buffer bytes left: {:?}", buf.len() - header_length as usize);
+    // println!("Field Header Length: {:?}", header_length);
     if (payload_length + header_length as u64) > buf.len() as u64 {
         return Err(format!("Length of field ({}) exceeded input buffer", payload_length));
     }
-    let payload = &buf[(header_length as usize)..((payload_length + header_length as u64) as usize)];
-    println!("Field Payload Length: {:?}", payload.len());
-    let mut member: ASN1Field;
-    let mut member_offset: usize = 0;
-    match tag {
+    println!("Header Length: {}", header_length);
+    println!("Payload Length: {}", payload_length);
+    let members: Vec<ASN1Field> = match tag {
         Tag::Sequence => {
-            println!("Found a Sequence!");
             println!();
-            println!("Sequence offset: {}", member_offset);
-            member = get_field(&payload).unwrap();
-            member_offset += member.header_length as usize + member.payload_length as usize;
-            member = get_field(&payload[member_offset..payload.len()]).unwrap();
-
-            members = Some(&[member]);
+            println!("!! Found a sequence at Start Offset: {}", start_offset);
+            get_collection_members(buf,start_offset + header_length as u64, payload_length)
         },
-        Tag::Set => members = Some(&[]),
-        _ => members = None
-    }
+        Tag::Set => {
+            println!();
+            println!("!! Found a set at Start Offset: {}", start_offset);
+            get_collection_members(buf,start_offset + header_length as u64, payload_length)
+        },
+        _ => Vec::new()
+    };
+    // Ok(5)
     Ok(ASN1Field {
         tag: tag,
         tag_class: tag_class,
-        binary: &buf,
+        buf: buf,
         header_length: header_length,
         payload_length: payload_length,
-        // members: members
+        start_offset: start_offset,
+        members: members,
+        // members: &members[0..members.len()]
+        // members: match members.len() {
+        //     0 => None,
+        //     _ => Some(&members[0..members.len()])
+        // }
     })
 }
 
+fn get_collection_members(buf: &Vec<u8>, start_offset: u64, collection_length: u64) -> Vec<ASN1Field> {
+    let mut member: ASN1Field;
+    let mut members: Vec<ASN1Field> = Vec::new();
+    let mut member_offset: u64 = 0;
+    // println!("Member offset: {} Start Offset: {}, Collection Length: {}", member_offset, start_offset, collection_length);
+    while (member_offset as u64) < collection_length {
+
+        println!("Getting Sequence Member. start_offset: {}, member_offset: {}, collection_length: {}", start_offset, member_offset, collection_length);
+        member = get_field(&buf, start_offset + member_offset).unwrap();
+        // member = get_field(&buf[(header_length as usize + member_offset)..buf.len()]).unwrap();
+        println!("Found member: header length {} payload length {}", member.header_length, member.payload_length);
+        member_offset += member.header_length as u64 + member.payload_length as u64;
+        members.push(member);
+    }
+    members
+}
 
 pub fn get_file_as_byte_vec(filename: &String) -> Vec<u8> {
     let mut f = File::open(&filename).expect("no file found");
