@@ -11,6 +11,21 @@ pub struct ASN1Field <'a> {
     members: Vec<ASN1Field<'a>>
 }
 
+impl ASN1Field<'_> {
+    pub fn get_payload_vec(&self) -> Vec<u8> {
+        let payload_start: usize = self.start_offset as usize + self.header_length as usize;
+        self.buf[payload_start..(payload_start + self.payload_length as usize)].to_vec()
+    }
+
+    pub fn get_members_vec(&self) -> &Vec<ASN1Field> {
+        &self.members
+    }
+
+    pub fn get_type_name(&self) -> String{
+        asn1_printable_type(&self.tag)
+    }
+}
+
 pub enum Tag {
     Integer,
     BitString,
@@ -208,7 +223,7 @@ mod tests {
     fn get_outer_sequence_field() {
         let test_cert = "1.crt".to_string();
         let buf = get_file_as_byte_vec(&test_cert);
-        let field = get_field(&buf[0..buf.len()]).unwrap();
+        let field = get_field(&buf,0).unwrap();
         assert!(matches!(field.tag, Tag::Sequence));
         assert_eq!(field.binary[0],48);
         assert_eq!(field.header_length,4);
@@ -218,7 +233,7 @@ mod tests {
     fn get_sequence_inner_field1() {
         let test_cert = "1.crt".to_string();
         let buf = get_file_as_byte_vec(&test_cert);
-        let field = get_field(&buf[4..buf.len()]).unwrap();
+        let field = get_field(&buf,4).unwrap();
         assert!(matches!(field.tag, Tag::Sequence));
         assert_eq!(field.header_length,4);
         assert_eq!(field.payload_length,840);
@@ -227,7 +242,7 @@ mod tests {
     fn get_sequence_inner_field2() {
         let test_cert = "1.crt".to_string();
         let buf = get_file_as_byte_vec(&test_cert);
-        let field = get_field(&buf[848..buf.len()]).unwrap();
+        let field = get_field(&buf,848).unwrap();
         assert!(matches!(field.tag, Tag::Sequence));
         assert_eq!(field.header_length,2);
         assert_eq!(field.payload_length,13);
@@ -236,7 +251,7 @@ mod tests {
     fn get_sequence_inner_field3() {
         let test_cert = "1.crt".to_string();
         let buf = get_file_as_byte_vec(&test_cert);
-        let field = get_field(&buf[863..buf.len()]).unwrap();
+        let field = get_field(&buf,863).unwrap();
         assert!(matches!(field.tag, Tag::BitString));
         assert_eq!(field.header_length,4);
         assert_eq!(field.payload_length,513);
